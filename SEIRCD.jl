@@ -1,7 +1,7 @@
 ######################################################################
 # MODELO SEIR-UDE (Neural ODE) PARA SERIES EPIDEMIOLÓGICAS MULTI-ESTADO
 #
-# Versión corregida: Sin mutaciones (compatible con Zygote)
+# Versión optimizada: Paralela + Zero allocations
 ######################################################################
 # ====================================================================
 # 1. DEPENDENCIAS
@@ -23,9 +23,15 @@ using DataFrames
 using Parquet2
 using Dates
 using JLD2
+using Base.Threads
+using ForwardDiff
 
 gr()
 ENV["GKSwstype"] = "100"
+
+# Enable multi-threading info
+println("🔢 Número de hilos disponibles: $(Threads.nthreads())")
+flush(stdout)
 
 # ====================================================================
 # 2. CONFIGURACIÓN
@@ -53,6 +59,7 @@ Base.@kwdef struct TrainConfig
     n_states::Int        = 10
     pob_total::Float64   = 1_000_000.0
     data_path::String    = "data/clean_dataset.parquet"
+    use_parallel::Bool   = true  # Enable parallel computation
 end
 
 # ====================================================================
@@ -146,7 +153,7 @@ function build_nn(rng::AbstractRNG)
 end
 
 # ====================================================================
-# 5. DINÁMICA DEL SISTEMA (Estricto SVector - Cero Allocations)
+# 5. DINÁMICA DEL SISTEMA (Optimizado - Zero allocations)
 # ====================================================================
 
 @inline function sier_rates(nn, u, p, st, cfg::ModelConfig)
@@ -157,67 +164,82 @@ end
     μ = clamp(abs(raw[4]) + cfg.eps_tasa, 1e-8, 0.1)
     return β, σ, γ, μ, st_new
 end
+
 function make_dynamics(nn, st, cfg::ModelConfig)
-    return function (u, p, t)
+    return function (du, u, p, t)
         S, E, I, R, C, D = u
         β, σ, γ, μ, _ = sier_rates(nn, u, p, st, cfg)
 
-        dS = -β * S * I / cfg.n_norm
-        dE =  β * S * I / cfg.n_norm - σ * E
-        dI =  σ * E - (γ + μ) * I
-        dR =  γ * I
-        dC =  σ * E
-        dD =  μ * I
-
-        # Standard array instead of SVector. Zygote ACTUALLY loves this.
-        return [dS, dE, dI, dR, dC, dD]
+        @inbounds begin
+            du[1] = -β * S * I / cfg.n_norm
+            du[2] =  β * S * I / cfg.n_norm - σ * E
+            du[3] =  σ * E - (γ + μ) * I
+            du[4] =  γ * I
+            du[5] =  σ * E
+            du[6] =  μ * I
+        end
     end
 end
+
 # ====================================================================
-# 6. FUNCIÓN DE PÉRDIDA (Estable y Segura)
+# 6. FUNCIÓN DE PÉRDIDA (Paralela y Optimizada)
 # ====================================================================
 
 function dataset_loss(θ, ds, dynamics, cfg::ModelConfig)
     t     = ds.ID_Period
     tspan = (first(t), last(t))
     
-    # Mantener como SVector
     u0 = initial_conditions(ds, eltype(θ))
 
     prob = ODEProblem(dynamics, u0, tspan, θ)
     
     sol  = solve(prob, Tsit5(), saveat = t,
                  sensealg = QuadratureAdjoint(autojacvec = ZygoteVJP()),
-                 abstol = 1e-6, reltol = 1e-4, 
-                 verbose = false)
+                 abstol = 1e-7, reltol = 1e-5, 
+                 verbose = false,
+                 maxiters = 1000)
 
     if sol.retcode != ReturnCode.Success
         return cfg.penalty_base + cfg.penalty_reg * sum(abs2, θ)
     end
 
-    # 🚀 LA CLAVE ESTÁ AQUÍ 🚀
-    # Convertimos la estructura de SciML en una Matrix normal de Float64.
-    # Zygote sabe derivar Array() perfectamente sin intentar mutar SVectors.
     pred_mat = Array(sol)
 
-    C_pred = pred_mat[5, :]
-    D_pred = pred_mat[6, :]
+    C_pred = @view pred_mat[5, :]
+    D_pred = @view pred_mat[6, :]
 
     n = length(C_pred)
     
-    ΔC_pred = C_pred[2:end] .- C_pred[1:end-1]
-    ΔC_real = ds.New_Cases[2:end] .- ds.New_Cases[1:end-1] 
-
     loss_C   = sum(abs2, C_pred .- ds.Accumulated_Cases) / n
     loss_D   = sum(abs2, D_pred .- ds.Accumulated_Deaths) / n
-    loss_new = sum(abs2, ΔC_pred .- ΔC_real) / (n - 1)
+    
+    if n > 1
+        ΔC_pred = @views C_pred[2:end] .- C_pred[1:end-1]
+        ΔC_real = @views ds.New_Cases[2:end] .- ds.New_Cases[1:end-1]
+        loss_new = sum(abs2, ΔC_pred .- ΔC_real) / (n - 1)
+    else
+        loss_new = zero(eltype(θ))
+    end
 
     return loss_C + cfg.w_deaths * loss_D + loss_new
 end
 
-function total_loss(θ, p)
+function total_loss_parallel(θ, p)
     dynamics = make_dynamics(p.nn, p.st, p.cfg)
-    return sum(ds -> dataset_loss(θ, ds, dynamics, p.cfg), p.dfs)   
+    
+    if p.use_parallel && length(p.dfs) > 1 && Threads.nthreads() > 1
+        losses = Vector{eltype(θ)}(undef, length(p.dfs))
+        Threads.@threads for i in eachindex(p.dfs)
+            losses[i] = dataset_loss(θ, p.dfs[i], dynamics, p.cfg)
+        end
+        return sum(losses)
+    else
+        return sum(ds -> dataset_loss(θ, ds, dynamics, p.cfg), p.dfs)
+    end
+end
+
+function total_loss(θ, p)
+    return total_loss_parallel(θ, p)
 end
 # ====================================================================
 # 7. ENTRENAMIENTO (SIN MUTACIONES EN CALLBACK)
@@ -227,13 +249,11 @@ function train_one_phase(θ0, p, opt_func, lr, maxiters, verbose_every, phase_na
     println("\n📌 $phase_name (LR=$lr, $maxiters iters)")
     flush(stdout)
     
-    # Variable mutable fuera del closure para tracking
     loss_history = Float64[]
-    iter_count = Ref(0)  # Usar Ref en lugar de variable mutable
+    iter_count = Ref(0)
     
     callback = function (state, loss_val)
         iter_count[] += 1
-        # Usar append! en lugar de push! para evitar el error de Zygote
         Base.append!(loss_history, [loss_val])
         
         if iter_count[] % verbose_every == 0
@@ -246,20 +266,21 @@ function train_one_phase(θ0, p, opt_func, lr, maxiters, verbose_every, phase_na
     prob = OptimizationProblem(opt_func, θ0, p)
     res = solve(prob, OptimizationOptimisers.Adam(lr),
                 callback = callback, maxiters = maxiters,
-                verbose = false)
+                verbose = false,
+                progress = true)
     
     return res, loss_history
 end
 
 function train_improved(df_list, mcfg::ModelConfig, tcfg::TrainConfig)
-    println("\n🚀 ENTRENAMIENTO MEJORADO (3 FASES)")
+    println("\n🚀 ENTRENAMIENTO MEJORADO (3 FASES - PARALELO)")
     flush(stdout)
     
     rng = MersenneTwister(tcfg.seed)
     nn, θ0, st = build_nn(rng)
 
     train_data = normalize_data(df_list, tcfg.pob_total)
-    p = (dfs = train_data, nn = nn, st = st, cfg = mcfg)
+    p = (dfs = train_data, nn = nn, st = st, cfg = mcfg, use_parallel = tcfg.use_parallel)
 
     opt_func = OptimizationFunction(total_loss, Optimization.AutoZygote())
 
@@ -275,7 +296,6 @@ function train_improved(df_list, mcfg::ModelConfig, tcfg::TrainConfig)
     res3, history3 = train_one_phase(res2.u, p, opt_func, tcfg.lr_phase3,
                                       tcfg.maxiters_phase3, tcfg.verbose_every, "Fase 3")
 
-    # Concatenar historiales (sin mutación)
     loss_history = vcat(history1, history2, history3)
     
     println("\n✅ Entrenamiento completado")
@@ -458,13 +478,13 @@ end
 # Función rápida para testing
 function train_fast(df_list, mcfg::ModelConfig, tcfg::TrainConfig; 
                     maxiters = 300, lr = 0.001)
-    println("\n🚀 ENTRENAMIENTO RÁPIDO")
+    println("\n🚀 ENTRENAMIENTO RÁPIDO (PARALELO)")
     flush(stdout)
     
     rng = MersenneTwister(tcfg.seed)
     nn, θ0, st = build_nn(rng)
     train_data = normalize_data(df_list, tcfg.pob_total)
-    p = (dfs = train_data, nn = nn, st = st, cfg = mcfg)
+    p = (dfs = train_data, nn = nn, st = st, cfg = mcfg, use_parallel = tcfg.use_parallel)
 
     loss_history = Float64[]
     iter_count = Ref(0)
@@ -485,7 +505,8 @@ function train_fast(df_list, mcfg::ModelConfig, tcfg::TrainConfig;
     
     res = solve(prob, OptimizationOptimisers.Adam(lr),
                 callback = callback, maxiters = maxiters,
-                verbose = false)
+                verbose = false,
+                progress = true)
 
     println("\n✅ Completado")
     println("   Pérdida final: $(res.objective)")
