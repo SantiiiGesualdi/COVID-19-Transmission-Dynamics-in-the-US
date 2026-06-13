@@ -1,0 +1,45 @@
+```
+# Julia specific
+*.jl.c
+*.jl.so
+*.jl.dylib
+*.jl.dll
+*.ji
+
+# Build artifacts
+build/
+dist/
+*.so
+*.dylib
+*.dll
+
+# Dependencies
+.julia/
+deps/build/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Temporary files
+*.tmp
+```
