@@ -1,10 +1,39 @@
+using HTTP
+using JSON3
+using CSV
 using DataFrames
 using Parquet2
+using Downloads: download
 using Dates
 
-file_path = "data/cases_wrapped.parquet"
+url      = "https://api.github.com/repos/CSSEGISandData/COVID-19/contents/csse_covid_19_data/csse_covid_19_daily_reports_us?ref=master"
+response = HTTP.get(url)
 
-data = DataFrame(Parquet2.readfile(file_path))
+files = JSON3.read(response.body)
+
+# Filter csv files and get download url (dwl_ulr)
+dwl_url = [f.download_url for f in files if endswith(f.name, ".csv")]
+
+# Download and read CSVs as a DataFrame list and join them
+data_list = [CSV.read(download(u), DataFrame) for u in dwl_url]
+
+data      = vcat(data_list..., cols=:union)
+
+dropmissing!(data, :Last_Update) # Drop rows with missing Last_Update values
+
+date_format = dateformat"yyyy-mm-dd HH:MM:SS"
+transform!(data, :Last_Update => ByRow(x -> DateTime(x, date_format)) => :Last_Update)
+
+# Clean up a little the DataFrame
+if "Date" in names(data)
+    select!(data, Not(:Date))
+end
+
+rename!(data, :Confirmed => :Accumulated_Cases, 
+            :Deaths => :Accumulated_Deaths, 
+            :Province_State => :State)
+
+sort!(data, [:Last_Update, :State])
 
 
 select!(data, :State, :Last_Update, :Accumulated_Cases, 
@@ -14,8 +43,6 @@ select!(data, :State, :Last_Update, :Accumulated_Cases,
 lag0(x) = vcat(0, x[1:end-1]) 
 
 gdf_state = groupby(data, :State)
-
-
 
 # Calculate the New_Cases and New_Deaths columns
 transform!(gdf_state, 
@@ -50,6 +77,8 @@ transform!(df,
 
 
 sort!(df, [:State, :Start_Date])
+
 # Save cleaned dataset as Parquet file
-out_dir = joinpath(pwd(), "data/clean_dataset.parquet")
+mkpath("data")
+out_dir = joinpath(pwd(), "data/cases_deaths.parquet")
 Parquet2.writefile(out_dir, df)

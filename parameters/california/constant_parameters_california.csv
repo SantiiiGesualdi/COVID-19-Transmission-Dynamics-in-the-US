@@ -1,0 +1,4 @@
+Parameter,Physical_Value,Raw_Optimized_Value
+eta_vaccine_loss,4.8778108668861235e-5,-5.318169006401784
+omega_immunity_loss,0.004991176857697087,-0.003529260584439257
+tau_incubation_delay,5.962897968067097,-0.2473594913772142
