@@ -1,4 +1,3 @@
-
 using DifferentialEquations, DelayDiffEq, OrdinaryDiffEq
 using Lux, ComponentArrays, JLD2
 using LogExpFunctions: logistic
@@ -7,7 +6,7 @@ using Statistics, Printf
 using Plots
 
 # ===========================================================================
-# 0. LIGHTWEIGHT STATISTICS (no StatsBase dependency, matching 04's spirit)
+# 0. LIGHTWEIGHT STATISTICS
 # ===========================================================================
 # Population skewness / excess kurtosis (StatsBase defaults).
 function skewness(x::AbstractVector)
@@ -21,7 +20,7 @@ function kurtosis(x::AbstractVector)
     return mean((x .- m) .^ 4) / m2^2 - 3.0
 end
 
-# Average ranks (ties get the mean rank) -> Spearman = Pearson on ranks.
+# Average ranks 
 function rankavg(v::AbstractVector)
     n = length(v); p = sortperm(v); r = zeros(Float64, n)
     i = 1
@@ -43,7 +42,7 @@ function spearman_cor(x::AbstractVector, y::AbstractVector)
     return cor(rankavg(x), rankavg(y))
 end
 
-# Sample autocorrelation at lag k.
+
 function autocor_lag(x::AbstractVector, k::Int)
     n = length(x); k >= n && return NaN
     m = mean(x); c0 = sum((x .- m) .^ 2)
@@ -52,7 +51,6 @@ function autocor_lag(x::AbstractVector, k::Int)
     return ck / c0
 end
 
-# Ljung–Box Q statistic over the first m lags (≈ χ² with m dof under H0=white).
 function ljung_box(x::AbstractVector, m::Int)
     n = length(x); q = 0.0
     for k in 1:m
@@ -63,7 +61,6 @@ function ljung_box(x::AbstractVector, m::Int)
     return n * (n + 2) * q
 end
 
-# Inverse standard-normal CDF (Acklam's algorithm) for Q-Q plots.
 function norminvcdf(p::Real)
     a = (-3.969683028665376e+01,  2.209460984245205e+02, -2.759285104469687e+02,
           1.383577518672690e+02, -3.066479806614716e+01,  2.506628277459239e+00)
@@ -90,7 +87,7 @@ function norminvcdf(p::Real)
 end
 
 # ===========================================================================
-# 1. CONFIG  (must match 02_seirvd_ude_ff.jl)
+# 1. CONFIG 
 # ===========================================================================
 const STATE_NAME    = "California"
 const TOTAL_POP     = 39_355_309.0
@@ -100,8 +97,6 @@ const T_VAC_DEFAULT = 260
 const EPS_DYN       = 1e-7      # eps inside SEIRVD_Dynamics (02 uses 1e-7)
 const SMOOTH_ABS    = 1e-18     # smooth |·| constant inside the log (02)
 
-# Training hyper-parameters (02 line 431) — exact, so the reconstructed loss
-# can be compared term-by-term with the training log.
 const HP = (w_D = 1.0, w_V = 0.5, w_NC = 0.3, w_S = 0.10,
             eps_C = 1e-6, eps_D = 1e-7, eps_V = 1e-6, eps_NC = 1e-5)
 
@@ -126,7 +121,7 @@ const nn = Chain(
 )
 
 # ===========================================================================
-# 2. DATA LOADING  (faithful to 02.load_data, incl. accumulate(max,·))
+# 2. DATA LOADING  
 # ===========================================================================
 function load_data(state_name, data_path, vac_path, total_pop, t_vac_default)
     println("Loading observed data for $state_name...")
@@ -183,8 +178,7 @@ end
 # ===========================================================================
 # 3. EXACT TRAINED DYNAMICS (faithful to 02.f_neural_dde + SEIRVD_Dynamics)
 # ===========================================================================
-# τ is fixed (no longer trainable), so it enters as a constant lag. The NN is
-# evaluated at present t and at the delayed time t-τ, exactly as in training.
+
 function make_nn_dynamics(nn_ps, st, t0_val, T_val, τ_safe, η_c, ω_c, t_init_vac; eps=EPS_DYN)
     span = T_val - t0_val
     return function seirvd_nn!(u, h, p, t)
@@ -240,13 +234,7 @@ end
 # ===========================================================================
 # 4. METRICS
 # ===========================================================================
-"""
-    fit_metrics(obs, pred; eps_loss)
 
-Full goodness-of-fit battery for one observable. `logMSE` reproduces the exact
-per-series training term (smooth |·| with SMOOTH_ABS + per-series `eps_loss`),
-so it is directly comparable to the C/D/V/NC numbers in the training log.
-"""
 function fit_metrics(obs::AbstractVector, pred::AbstractVector; eps_loss)
     n     = length(obs)
     resid = pred .- obs                       # residual = predicted - observed
@@ -269,7 +257,7 @@ function fit_metrics(obs::AbstractVector, pred::AbstractVector; eps_loss)
     smape = mean(2 .* abs.(resid) ./ (abs.(obs) .+ abs.(pred) .+ eps())) * 100
     wape  = sum(abs.(obs)) > 0 ? sum(abs.(resid)) / sum(abs.(obs)) * 100 : NaN  # robust MAPE
 
-    # Log-space MSE — the real training objective (smooth |·| as in the code).
+
     pred_smooth = sqrt.(pred .^ 2 .+ SMOOTH_ABS)
     log_mse = mean((log.(pred_smooth .+ eps_loss) .- log.(obs .+ eps_loss)) .^ 2)
     rmsle   = sqrt(mean((log1p.(abs.(pred)) .- log1p.(abs.(obs))) .^ 2))
@@ -284,13 +272,13 @@ function fit_metrics(obs::AbstractVector, pred::AbstractVector; eps_loss)
     denom_d = sum((abs.(pred .- ō) .+ abs.(obs .- ō)) .^ 2)
     willmott_d = denom_d > 0 ? 1 - ss_res / denom_d : NaN
 
-    # Kling–Gupta efficiency and its 3 components.
+    # Kling–Gupta efficiency 
     α   = std(obs) > 0 ? std(pred) / std(obs) : NaN   # variability ratio
     β   = mean(obs) != 0 ? mean(pred) / mean(obs) : NaN  # bias ratio
     kge = (isnan(r) || isnan(α) || isnan(β)) ? NaN :
           1 - sqrt((r - 1)^2 + (α - 1)^2 + (β - 1)^2)
 
-    # Theil's U2 vs naive persistence forecast (<1 ⇒ better than "no change").
+    # Theil's U2 vs naive persistence forecast 
     theil_u2 = NaN
     if n >= 2
         num = sqrt(sum((pred[2:end] .- obs[2:end]) .^ 2))
