@@ -534,7 +534,7 @@ savefig(p_micro, joinpath(output_pdf, "3_sirvd_dynamics_micro_$state_lower.pdf")
 ω_hist = [p[2] for p in param_history]
 τ_hist = [p[3] for p in param_history]
 
-p4_rates = plot(η_hist, label="η (Pérdia de vacunación)", color=:dodgerblue, linewidth=2)
+p4_rates = plot(η_hist, label="η (Pérdida de vacunación)", color=:dodgerblue, linewidth=2)
 plot!(p4_rates, ω_hist, label="ω (Pérdida de inmunidad)", color=:darkorange, linewidth=2)
 plot!(p4_rates, xlabel="Iteraciones", ylabel="Días")
 
