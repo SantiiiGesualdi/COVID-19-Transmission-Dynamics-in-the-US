@@ -52,12 +52,13 @@ $$
 
 *Note: $`\tau`$ indicates the time delay, looking at the previous instant $`t - \tau`$.*
 
-The full SEIRVD delay differential equation (DDE) system is defined as follow\
+The full SEIRVD delay differential equation (DDE) system is defined as follow
+
 $$
 \begin{aligned}
-    \frac{dS}{dt} &= -\rho - v S + \omega R + \eta V &\quad \frac{dV}{dt} &= v S - \eta V \\
-    \frac{dE}{dt} &= \rho - \rho_\tau &\quad \frac{dD}{dt} &= \phi_D I \\
-    \frac{dI}{dt} &= (1 - \phi_E)\rho_\tau - (\phi_R + \phi_D)I &\quad \frac{dC}{dt} &= (1 - \phi_E)\rho_\tau \\
-    \frac{dR}{dt} &= \phi_E \rho_\tau + \phi_R I - \omega R & &
+    \frac{dS}{dt} = -\rho - v S + \omega R + \eta V &\quad \frac{dV}{dt} &= v S - \eta V \\
+    \frac{dE}{dt} = \rho - \rho_\tau &\quad \frac{dD}{dt} &= \phi_D I \\
+    \frac{dI}{dt} = (1 - \phi_E)\rho_\tau - (\phi_R + \phi_D)I &\quad \frac{dC}{dt} &= (1 - \phi_E)\rho_\tau \\
+    \frac{dR}{dt} = \phi_E \rho_\tau + \phi_R I - \omega R
 \end{aligned}
 $$
