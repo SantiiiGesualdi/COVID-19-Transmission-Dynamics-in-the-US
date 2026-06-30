@@ -6,7 +6,7 @@ using Random, CSV, Parquet2, DataFrames
 using DataInterpolations
 using Plots, StatsPlots
 
-# 1. SWITCH TO FORWARDDIFF (Extremely fast for < 10 parameters)
+# SWITCH TO FORWARDDIFF
 Turing.setadbackend(:forwarddiff)
 
 # ===========================================================================
@@ -121,7 +121,7 @@ prob_base = DDEProblem(SEIRVD_Dynamics_Interpolated, u_0, hist_func, tspan, dumm
 # BAYESIAN MODEL DEFINITION
 # ===========================================================================
 @model function bayesian_covid_model(t_obs, C_obs, D_obs, prob)
-    # Priors (in raw space, roughly centered around your optimized values)
+    # Priors
     η ~ Normal(-3.89, 1.5) 
     ω ~ Normal(-2.19, 1.5) 
     τ ~ Normal(5.0, 1.5)   

@@ -6,7 +6,7 @@ using Statistics, Printf
 using Plots
 
 # ===========================================================================
-# 0. LIGHTWEIGHT STATISTICS
+# LIGHTWEIGHT STATISTICS
 # ===========================================================================
 # Population skewness / excess kurtosis (StatsBase defaults).
 function skewness(x::AbstractVector)
@@ -121,7 +121,7 @@ const nn = Chain(
 )
 
 # ===========================================================================
-# 2. DATA LOADING  
+# DATA LOADING  
 # ===========================================================================
 function load_data(state_name, data_path, vac_path, total_pop, t_vac_default)
     println("Loading observed data for $state_name...")
@@ -176,7 +176,7 @@ function load_data(state_name, data_path, vac_path, total_pop, t_vac_default)
 end
 
 # ===========================================================================
-# 3. EXACT TRAINED DYNAMICS (faithful to 02.f_neural_dde + SEIRVD_Dynamics)
+# EXACT TRAINED DYNAMICS (faithful to 02.f_neural_dde + SEIRVD_Dynamics)
 # ===========================================================================
 
 function make_nn_dynamics(nn_ps, st, t0_val, T_val, τ_safe, η_c, ω_c, t_init_vac; eps=EPS_DYN)
@@ -232,7 +232,7 @@ function make_nn_dynamics(nn_ps, st, t0_val, T_val, τ_safe, η_c, ω_c, t_init_
 end
 
 # ===========================================================================
-# 4. METRICS
+# METRICS
 # ===========================================================================
 
 function fit_metrics(obs::AbstractVector, pred::AbstractVector; eps_loss)
@@ -308,7 +308,7 @@ residual_stats(resid) = (; mean=mean(resid), std=std(resid),
                          min=minimum(resid), max=maximum(resid))
 
 # ===========================================================================
-# 5. RUN — load data, NN, constants, then solve the exact trained DDE
+# RUN — load data, NN, constants, then solve the exact trained DDE
 # ===========================================================================
 t_obs, C_obs, D_obs, New_C_obs, t_vac, V_acc_obs, t_init_vac, tspan =
     load_data(STATE_NAME, DATA_PATH, VAC_PATH, TOTAL_POP, T_VAC_DEFAULT)
@@ -362,7 +362,7 @@ incC_obs   = diff(C_obs);  incC_pred = diff(C_pred)
 incD_obs   = diff(D_obs);  incD_pred = diff(D_pred)
 
 # ===========================================================================
-# 6. COMPUTE METRICS PER OBSERVABLE
+# COMPUTE METRICS PER OBSERVABLE
 # ===========================================================================
 m_C    = fit_metrics(C_obs,     C_pred;            eps_loss=HP.eps_C)
 m_D    = fit_metrics(D_obs,     D_pred;            eps_loss=HP.eps_D)
@@ -443,7 +443,7 @@ println("═"^78)
 @printf("  ══ TOTAL loss = %.6e\n", total_loss)
 
 # ===========================================================================
-# 8. EXPORT CSVs
+# EXPORT CSVs
 # ===========================================================================
 out_params = "parameters/$state_lower"
 mkpath(out_params)
@@ -462,7 +462,7 @@ CSV.write(path_resid, df_resid)
 println("💾 Residuals -> $path_resid")
 
 # ===========================================================================
-# 9. DIAGNOSTIC PLOTS
+# DIAGNOSTIC PLOTS
 # ===========================================================================
 const FIG_DIR = "figs/$state_lower/goodness_of_fit_nn"
 const FIG_PNG = joinpath(FIG_DIR, "png")
@@ -477,7 +477,7 @@ C_res = C_pred .- C_obs
 D_res = D_pred .- D_obs
 V_res = V_acc_pred_at_vac .- V_acc_obs
 
-# --- 9.1 Fit on log scale (reveals the tails the loss optimizes) -----------
+# ---- Fit on log scale (reveals the tails the loss optimizes) -----------
 function plot_logfit(t_d, obs, t_p, pred, c_data, c_model, ylab)
     plt = plot(t_d, max.(obs, 1e-9), yscale=:log10, label="Datos", color=c_data,
                lw=2, size=(720, 450), xlabel="Días", ylabel=ylab, legend=:bottomright)
@@ -488,7 +488,7 @@ save_fig(plot_logfit(t_obs, C_obs,     t_obs, C_pred,     :steelblue,      :navy
 save_fig(plot_logfit(t_obs, D_obs,     t_obs, D_pred,     :firebrick,      :darkred,   "D (log)"), "logfit_deaths")
 save_fig(plot_logfit(t_vac, V_acc_obs, t_obs, V_acc_pred, :mediumseagreen, :darkgreen, "V (log)"), "logfit_vaccination")
 
-# --- 9.2 Residuals vs time, with ±2σ bands ---------------------------------
+# ---- Residuals vs time, with ±2σ bands ---------------------------------
 function plot_residual_time(t, r, col, name, x)
     μ, σ = mean(r), std(r)
     plt = plot(t, r, color=col, lw=1.5, legend=false, size=(720, 450),
@@ -501,7 +501,7 @@ save_fig(plot_residual_time(t_obs, C_res, :navy, "Casos", "C"), "residual_cases"
 save_fig(plot_residual_time(t_obs, D_res, :darkred   , "Muertes", "M"), "residual_deaths")
 save_fig(plot_residual_time(t_vac, V_res, :darkgreen, "Vacunación", "V"),  "residual_vaccination")
 
-# --- 9.3 Predicted vs observed scatter (with y = x) ------------------------
+# ---- Predicted vs observed scatter (with y = x) ------------------------
 function plot_scatter_yx(obs, pred, col)
     lo, hi = min(minimum(obs), minimum(pred)), max(maximum(obs), maximum(pred))
     plt = scatter(obs, pred, color=col, alpha=0.5, ms=3, markerstrokewidth=0,
@@ -513,7 +513,7 @@ save_fig(plot_scatter_yx(C_obs, C_pred,                :navy),      "scatter_cas
 save_fig(plot_scatter_yx(D_obs, D_pred,                :darkred),   "scatter_deaths")
 save_fig(plot_scatter_yx(V_acc_obs, V_acc_pred_at_vac, :darkgreen), "scatter_vaccination")
 
-# --- 9.4 Residual histogram with fitted normal density ---------------------
+# ---- Residual histogram with fitted normal density ---------------------
 function plot_resid_hist(r, col)
     plt = histogram(r, bins=40, color=col, alpha=0.6, legend=false, normalize=:pdf,
                     size=(640, 440), xlabel="Residuos", ylabel="Densidad")
@@ -529,7 +529,7 @@ save_fig(plot_resid_hist(C_res, :navy),      "hist_cases")
 save_fig(plot_resid_hist(D_res, :darkred),   "hist_deaths")
 save_fig(plot_resid_hist(V_res, :darkgreen), "hist_vaccination")
 
-# --- 9.5 Normal Q-Q plot of standardized residuals -------------------------
+# ---- Normal Q-Q plot of standardized residuals -------------------------
 function plot_qq(r, col)
     σ = std(r)
     σ == 0 && return plot(title="QQ no disponible (σ=0)")
@@ -547,7 +547,7 @@ save_fig(plot_qq(C_res, :navy),      "qq_cases")
 save_fig(plot_qq(D_res, :darkred),   "qq_deaths")
 save_fig(plot_qq(V_res, :darkgreen), "qq_vaccination")
 
-# --- 9.6 ACF of residuals, with ±1.96/√n white-noise bands -----------------
+# ---- ACF of residuals, with ±1.96/√n white-noise bands -----------------
 function plot_acf(r, col; maxlag=30)
     n = length(r); K = min(maxlag, n - 1)
     lags = collect(1:K)
@@ -563,7 +563,7 @@ save_fig(plot_acf(C_res, :navy),      "acf_cases")
 save_fig(plot_acf(D_res, :darkred),   "acf_deaths")
 save_fig(plot_acf(V_res, :darkgreen), "acf_vaccination")
 
-# --- 9.7 Incidence overlay (first differences) — the honest, non-monotone view
+# ---- Incidence overlay (first differences) — the honest, non-monotone view
 function plot_incidence(t, obs_inc, pred_inc, c_d, c_m, ylab)
     plt = plot(t, obs_inc, label="Datos (incidencia)", color=c_d, lw=1.5,
                size=(720, 450), xlabel="Días", ylabel=ylab, legend=:topright)
