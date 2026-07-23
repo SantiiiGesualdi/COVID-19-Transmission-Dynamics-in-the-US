@@ -1,13 +1,13 @@
 using ComponentArrays
 using DifferentialEquations, DelayDiffEq
 using Turing
+using FlexiChains: summarystats
+using ForwardDiff: value
 using LogExpFunctions: logistic, logit, softplus
 using Random, CSV, Parquet2, DataFrames
 using DataInterpolations
 using Plots, StatsPlots
 
-# SWITCH TO FORWARDDIFF
-Turing.setadbackend(:forwarddiff)
 
 # ===========================================================================
 # LOAD DATA & PRE-CALCULATED DYNAMIC PARAMETERS
@@ -133,7 +133,9 @@ prob_base = DDEProblem(SEIRVD_Dynamics_Interpolated, u_0, hist_func, tspan, dumm
     p_current = ComponentArray(η = η, ω = ω, τ = τ)
     τ_safe = softplus(τ) + 1.0
     
-    _prob = remake(prob, p=p_current, constant_lags=[τ_safe])
+    # constant_lags only locate solver discontinuities and must be plain Float64;
+    # τ's gradient still flows through t_past = t - τ_safe inside the dynamics.
+    _prob = remake(prob, p=p_current, constant_lags=[value(τ_safe)])
     
     # ForwardDiff handles standard Tsit5 cleanly
     sol = solve(_prob, MethodOfSteps(Tsit5()), 
@@ -161,9 +163,11 @@ end
 println("\n🚀 Starting Hamiltonian Monte Carlo (NUTS)...")
 model = bayesian_covid_model(t_obs, C_obs, D_obs, prob_base)
 
-# HMC is now evaluating a standard DDE without neural network overhead
-sampler = NUTS(0.65)
-chain = sample(model, sampler, 10, discard_initial=100, progress=true)
+# HMC is now evaluating a standard DDE without neural network overhead.
+# target_accept=0.9 takes smaller steps → far fewer divergences on this stiff DDE.
+# N=10 was a smoke test; real inference needs hundreds–thousands of draws.
+sampler = NUTS(0.9; adtype=AutoForwardDiff())
+chain = sample(model, sampler, 300, discard_initial=300, progress=true)
 
 println("\n✅ MCMC Sampling Finished.")
 
@@ -183,3 +187,47 @@ savefig(p_density, "figs/$state_lower/mcmc/physical_rates_posterior.png")
 
 p_tau_density = density(τ_physical, label="τ (Incubation Delay)", lw=2, color=:forestgreen)
 savefig(p_tau_density, "figs/$state_lower/mcmc/physical_tau_posterior.png")
+
+# ===========================================================================
+# DIAGNOSTICS: convergence summary + trace plots
+# ===========================================================================
+η_s, ω_s, τ_s = Array(chain[:η]), Array(chain[:ω]), Array(chain[:τ])
+
+# Summary table = the primary numeric result: mean/std + ess (effective sample
+# size) and rhat (between/within-chain variance ratio; want ≈1.00).
+println("\n=== Posterior summary (sampled scale) ===")
+show(stdout, MIME("text/plain"), summarystats(chain)); println()
+
+# Trace = sampled value vs iteration. Healthy = stationary "fuzzy caterpillar",
+# no drift or long flat stretches (stuck sampler).
+p_trace = plot(
+    plot(η_s, title="η", legend=false),
+    plot(ω_s, title="ω", legend=false),
+    plot(τ_s, title="τ", legend=false);
+    layout=(3, 1), xlabel="Iteration", ylabel="Value", size=(700, 600),
+)
+savefig(p_trace, "figs/$state_lower/mcmc/trace.png")
+
+# ===========================================================================
+# POSTERIOR PREDICTIVE CHECK: does the fitted model reproduce the data?
+# ===========================================================================
+
+p_ppc_C = scatter(t_obs, C_obs .* TOTAL_POP, ms=3, color=:black, label="Observed",
+                  xlabel="Day", ylabel="Accumulated cases", title="Posterior predictive: Cases", legend=:topleft)
+p_ppc_D = scatter(t_obs, D_obs .* TOTAL_POP, ms=3, color=:black, label="Observed",
+                  xlabel="Day", ylabel="Accumulated deaths", title="Posterior predictive: Deaths", legend=:topleft)
+
+for i in eachindex(η_s)
+    p_i = ComponentArray(η=η_s[i], ω=ω_s[i], τ=τ_s[i])
+    prob_i = remake(prob_base, p=p_i, constant_lags=[softplus(τ_s[i]) + 1.0])
+    sol_i  = solve(prob_i, MethodOfSteps(Tsit5()), saveat=t_obs, abstol=1e-6, reltol=1e-4)
+    if sol_i.retcode == ReturnCode.Success && size(Array(sol_i), 2) == length(t_obs)
+        arr = Array(sol_i)
+        lbl = i == 1 ? "Posterior draws" : ""
+        plot!(p_ppc_C, t_obs, max.(arr[7, :], 1e-9) .* TOTAL_POP, color=:steelblue, alpha=0.35, label=lbl)
+        plot!(p_ppc_D, t_obs, max.(arr[6, :], 1e-9) .* TOTAL_POP, color=:firebrick, alpha=0.35, label=lbl)
+    end
+end
+savefig(p_ppc_C, "figs/$state_lower/mcmc/ppc_cases.png")
+savefig(p_ppc_D, "figs/$state_lower/mcmc/ppc_deaths.png")
+println("\n📊 Saved figures to figs/$state_lower/mcmc/")
